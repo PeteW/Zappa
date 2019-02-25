@@ -786,7 +786,11 @@ class ZappaCLI(object):
             kwargs = dict(
                 lambda_arn=self.lambda_arn,
                 lambda_name=self.lambda_name,
-                vpc_config=self.vpc_config
+                vpc_config=self.vpc_config,
+                certificate_arn=self.alb_certificate_arn,
+                alb_loadbalancer_name=self.alb_loadbalancer_name,
+                alb_targetgroup_name=self.alb_targetgroup_name,
+                alb_invokepermissions_name=self.alb_invokepermissions_name
             )
             self.zappa.create_lambda_alb(**kwargs)
 
@@ -1108,6 +1112,12 @@ class ZappaCLI(object):
             confirm = input("Are you sure you want to undeploy? [y/n] ")
             if confirm != 'y':
                 return
+
+        if self.use_alb:
+            self.zappa.delete_lambda_alb(self.lambda_name,
+                                         self.alb_loadbalancer_name,
+                                         self.alb_targetgroup_name,
+                                         self.alb_invokepermissions_name)
 
         if self.use_apigateway:
             if remove_logs:
@@ -2089,6 +2099,14 @@ class ZappaCLI(object):
         self.context_header_mappings = self.stage_config.get('context_header_mappings', {})
         self.xray_tracing = self.stage_config.get('xray_tracing', False)
         self.desired_role_arn = self.stage_config.get('role_arn')
+
+        #PETEADDITIONS
+        # Load ALB-related settings
+        self.use_alb = self.stage_config.get('use_alb', False)
+        self.alb_loadbalancer_name = '{}-loadbalancer'.format(self.lambda_name)
+        self.alb_targetgroup_name = '{}-targetgroup'.format(self.lambda_name)
+        self.alb_invokepermissions_name = '{}-albstatement'.format(self.lambda_name)
+        self.alb_certificate_arn = self.stage_config.get('certificate_arn', None)
 
         # Additional tags
         self.tags = self.stage_config.get('tags', {})
