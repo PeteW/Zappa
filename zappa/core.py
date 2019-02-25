@@ -295,6 +295,7 @@ class Zappa(object):
             # Initialize clients
             self.s3_client = self.boto_client('s3')
             self.lambda_client = self.boto_client('lambda', config=long_config)
+            self.elbv2_client = self.boto_client('elbv2')
             self.events_client = self.boto_client('events')
             self.apigateway_client = self.boto_client('apigateway')
             # AWS ACM certificates need to be created from us-east-1 to be used by API gateway
@@ -1263,6 +1264,86 @@ class Zappa(object):
         return self.lambda_client.delete_function(
             FunctionName=function_name,
         )
+
+    ##
+    # Application load balancer
+    ##
+
+    def create_lambda_alb(  self,
+                            lambda_arn,
+                            lambda_name,
+                            vpc_config
+                         ):
+        """
+        Create the application load balancer (ALB) for this Zappa Deployment.
+        Includes creation of load balancer, rules and target groups
+        """
+        if not vpc_config:
+            vpc_config = {}
+        if not vpc_config["subnetids"]:
+            vpc_config["subnetids"] = []
+        if not vpc_config["SecurityGroupIds"]:
+            vpc_config["SecurityGroupIds"] = []
+        if not self.credentials_arn:
+            self.get_credentials_arn()
+        if not aws_environment_variables:
+            aws_environment_variables = {}
+        kwargs = dict(
+            Name="ALB-{}".format(lambda_name),
+            Subnets=vpc_config["SubnetIds"],
+            SecurityGroups=vpc_config["SecurityGroupIds"],
+            # TODO: Scheme can also be "internal" we need to add a new option for this.
+            Scheme="internet-facing"
+            # TODO: Tags might be a useful means of stock-keeping zappa-generated assets.
+            Tags=[],
+            Type="application",
+            # TODO: can be ipv4 or dualstack (for ipv4 and ipv6) ipv4 is required for internal Scheme.
+            IpAddressType="ipv4"
+        )
+        # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/elbv2.html#ElasticLoadBalancingv2.Client.create_load_balancer
+        response = self.elbv2_client.create_load_balancer(**kwargs)
+        if not(response.LoadBalancers) or len(response.LoadBalancers) != 1:
+            raise EnvironmentError("Failure to create application load balancer. Response was in unexpected format. Response was: {}".format(repr(response)))
+        if response.LoadBalancers[0]['State']['Code'] == 'failed':
+            raise EnvironmentError("Failure to create application load balancer. Response reported a failed state: {}".format(response.LoadBalancers[0]['State']['Reason']))
+        load_balancer_arn = response.LoadBalancers[0]["LoadBalancerArn"]
+        load_balancer_dns = response.LoadBalancers[0]["DNSName"]
+        load_balancer_vpc = response.LoadBalancers[0]["VpcId"]
+
+        kwargs = dict(
+            Name="TargetGroup-{}".format(lambda_name),
+            TargetType="lambda",
+            VpcId=load_balancer_vpc
+            # TODO: Add options for health checks
+        )
+        # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/elbv2.html#ElasticLoadBalancingv2.Client.create_target_group
+        response = self.elbv2_client.create_target_group(**kwargs)
+        if not(response.TargetGroups) or len(response.TargetGroups) != 1:
+            raise EnvironmentError("Failure to create application load balancer target group. Response was in unexpected format. Response was: {}".format(repr(response)))
+        target_group_arn = response.TargetGroups[0]['TargetGroupArn']
+
+        kwargs = dict(
+            TargetGroupArn=target_group_arn,
+            Targets=[{"Id": lambda_arn}]
+        )
+        # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/elbv2.html#ElasticLoadBalancingv2.Client.register_targets
+        response = self.elbv2_client.register_targets(**kwargs)
+
+        kwargs = dict(
+            LoadBalancerArn=load_balancer_arn,
+            Protocol="HTTPS",
+            # TODO: Add option for custom ports
+            Port=443,
+            # TODO: Listeners support custom ssl security policy (SslPolicy). For now we leave this default.
+            # TODO: Listeners support custom ssl certificates (Certificates). For now we leave this default.
+            DefaultActions=[{
+                "Type": "forward",
+                "TargetGroupArn": target_group_arn,
+            }]
+        )
+        # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/elbv2.html#ElasticLoadBalancingv2.Client.create_listener
+        response = self.elbv2_client.create_listener(**kwargs)
+
 
     ##
     # API Gateway

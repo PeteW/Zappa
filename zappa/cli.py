@@ -781,6 +781,16 @@ class ZappaCLI(object):
 
         endpoint_url = ''
         deployment_string = click.style("Deployment complete", fg="green", bold=True) + "!"
+        #PETEADDITIONS
+        if self.use_alb:
+            kwargs = dict(
+                lambda_arn=self.lambda_arn,
+                lambda_name=self.lambda_name,
+                vpc_config=self.vpc_config
+            )
+            self.zappa.create_lambda_alb(**kwargs)
+
+
         if self.use_apigateway:
 
             # Create and configure the API Gateway
